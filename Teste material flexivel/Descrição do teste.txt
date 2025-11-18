@@ -1,0 +1,3 @@
+O codigo foi carregado para o esp32 e foi submetido a repetição ate houver alguma falha
+
+A falha ocorreu apos 11.423 repetições, a falha foi no tambor o fio de nylon travo no exixo e fez o dedo ficar em flexão.
