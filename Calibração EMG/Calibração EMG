@@ -1,0 +1,147 @@
+#include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_ADS1X15.h>
+#include <math.h>
+
+#define ADDR_ADS_4 0x49
+#define I2C_SDA 21
+#define I2C_SCL 22
+#define EMGS_POR_JANELA 50
+
+Adafruit_ADS1115 ads4;
+
+// Variáveis
+int64_t soma_quadrados = 0;
+int contagem = 0;
+
+int offset_dc = 0;       // offset médio em repouso
+int LIMIAR_RMS = 0;
+int HISTERESIS = 0;
+
+bool musculo_ativo = false;
+
+int calcularRMS(int valor) {
+    int32_t absVal = abs(valor);
+    soma_quadrados += (int64_t)absVal * absVal;
+    contagem++;
+
+    if (contagem >= EMGS_POR_JANELA) {
+        int rms = sqrt((float)soma_quadrados / EMGS_POR_JANELA);
+        soma_quadrados = 0;
+        contagem = 0;
+        return rms;
+    }
+    return -1;
+}
+
+// === CALIBRAR OFFSET ===
+int calibrar_offset() {
+    Serial.println("\nCalibrando offset DC (repouso)...");
+
+    uint32_t inicio = millis();
+    long soma = 0;
+    int n = 0;
+
+    while (millis() - inicio < 2000) {
+        soma += ads4.readADC_SingleEnded(0);
+        n++;
+        delay(2);
+    }
+
+    return soma / n;
+}
+
+// === CALIBRAR RMS ===
+int calibrar_rms_ajustado(const char* msg) {
+    Serial.println(msg);
+
+    uint32_t inicio = millis();
+    long soma = 0;
+    int n = 0;
+
+    while (millis() - inicio < 2000) {
+        int val = ads4.readADC_SingleEnded(0);
+        int ajustado = val - offset_dc;
+        int rms = calcularRMS(ajustado);
+
+        if (rms > 0) {
+            soma += rms;
+            n++;
+        }
+    }
+
+    return soma / n;
+}
+
+void setup() {
+    Serial.begin(115200);
+    Wire.begin(I2C_SDA, I2C_SCL);
+    ads4.begin(ADDR_ADS_4);
+    ads4.setGain(GAIN_ONE);
+
+    Serial.println("===== CALIBRAÇÃO =====");
+
+    // 1) Calibração do offset
+    offset_dc = calibrar_offset();
+    Serial.print("Offset DC encontrado: ");
+    Serial.println(offset_dc);
+
+    delay(1500);
+
+    // 2) RMS repouso
+    int rms_repouso = calibrar_rms_ajustado("\nMantenha relaxado...");
+    Serial.print("RMS repouso ajustado: ");
+    Serial.println(rms_repouso);
+
+    delay(1500);
+
+    // 3) RMS ativo
+    int rms_ativo = calibrar_rms_ajustado("\nContraia o músculo...");
+    Serial.print("RMS ativo ajustado: ");
+    Serial.println(rms_ativo);
+
+    // 4) Cálculo do limiar
+    LIMIAR_RMS = (rms_repouso + rms_ativo) / 2;
+    HISTERESIS = LIMIAR_RMS * 0.20;
+
+    Serial.println("\n===== CALIBRAÇÃO COMPLETA =====");
+    Serial.print("LIMIAR = ");
+    Serial.println(LIMIAR_RMS);
+    Serial.print("HISTERESIS = ");
+    Serial.println(HISTERESIS);
+
+    delay(1500);
+}
+
+void loop() {
+
+    int leitura = ads4.readADC_SingleEnded(0);
+
+    // REMOVE OFFSET
+    int ajustado = leitura - offset_dc;
+
+    int rms = calcularRMS(ajustado);
+    if (rms <= 0) return;
+
+    // DETECÇÃO
+    bool ativou = false;
+    bool desativou = false;
+
+    if (!musculo_ativo && rms >= LIMIAR_RMS) {
+        musculo_ativo = true;
+        ativou = true;
+    }
+    else if (musculo_ativo && rms <= (LIMIAR_RMS - HISTERESIS)) {
+        musculo_ativo = false;
+        desativou = true;
+    }
+
+    // PRINT
+    Serial.print("RMS = ");
+    Serial.print(rms);
+    Serial.print(" | ");
+
+    if (ativou) Serial.println("ATIVADO ↑");
+    else if (desativou) Serial.println("DESATIVADO ↓");
+    else Serial.println(musculo_ativo ? "Ativo" : "Relaxado");
+}
